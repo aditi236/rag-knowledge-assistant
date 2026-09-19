@@ -914,137 +914,158 @@ The exact "I don't know" sentence lives in **one** constant. It is used inside t
 **L20-21**
 
 ```python
-20 | class LLM(Protocol):
-21 |     def generate(self, question: str, results: list[SearchResult]) -> str: ...
+20 | class MissingCredentialsError(RuntimeError):
+21 |     """Claude was selected but no API credentials are configured."""
+```
+
+`MissingCredentialsError` is our own small exception class. It exists because the Anthropic SDK reports "no API key" as a bare `TypeError` with a cryptic message; wrapping it in a named exception lets the API and CLI show a clear, actionable error (see the `except` block below).
+
+**L24-25**
+
+```python
+24 | class LLM(Protocol):
+25 |     def generate(self, question: str, results: list[SearchResult]) -> str: ...
 ```
 
 The `LLM` interface: any object with `generate(question, results) -> str`. The real model, the offline fallback and the test fake all satisfy it.
 
-**L24**
+**L28**
 
 ```python
-24 | def build_user_message(question: str, results: list[SearchResult]) -> str:
+28 | def build_user_message(question: str, results: list[SearchResult]) -> str:
 ```
 
 `build_user_message` formats the retrieved chunks and the question into the text sent as the user turn.
 
-**L25-28**
+**L29-32**
 
 ```python
-25 |     passages = "\n\n".join(
-26 |         f"[{number}] (source: {result.chunk.source})\n{result.chunk.text}"
-27 |         for number, result in enumerate(results, start=1)
-28 |     )
+29 |     passages = "\n\n".join(
+30 |         f"[{number}] (source: {result.chunk.source})\n{result.chunk.text}"
+31 |         for number, result in enumerate(results, start=1)
+32 |     )
 ```
 
 A generator expression numbers each passage starting at 1 (`enumerate(..., start=1)`, because humans and models say "passage 1", not "passage 0") and prints `[n] (source: file)` followed by the chunk text. `"\n\n".join(...)` puts a blank line between passages.
 
-**L29**
+**L33**
 
 ```python
-29 |     return f"<context>\n{passages}\n</context>\n\nQuestion: {question}"
+33 |     return f"<context>\n{passages}\n</context>\n\nQuestion: {question}"
 ```
 
 Wrap the passages in `<context>` tags, then put the question **after** the context. Clear delimiters help the model separate reference material from the question (and are a first step against prompt injection hidden in documents; they reduce, not eliminate, that risk). Putting the question last is recommended practice for long contexts.
 
-**L32-36**
+**L36-40**
 
 ```python
-32 | class ClaudeLLM:
-33 |     def __init__(self, model: str, max_tokens: int):
-34 |         self._model = model
-35 |         self._max_tokens = max_tokens
-36 |         self._client: anthropic.Anthropic | None = None
+36 | class ClaudeLLM:
+37 |     def __init__(self, model: str, max_tokens: int):
+38 |         self._model = model
+39 |         self._max_tokens = max_tokens
+40 |         self._client: anthropic.Anthropic | None = None
 ```
 
 `ClaudeLLM` remembers the model name and token limit. Note `_client` starts as `None`: the client is created **lazily**, so the app can start, pass health checks and accept uploads even with no API key. A missing key only surfaces when someone asks a question.
 
-**L38-40**
+**L42-44**
 
 ```python
-38 |     def generate(self, question: str, results: list[SearchResult]) -> str:
-39 |         if self._client is None:
-40 |             self._client = anthropic.Anthropic()
+42 |     def generate(self, question: str, results: list[SearchResult]) -> str:
+43 |         if self._client is None:
+44 |             self._client = anthropic.Anthropic()
 ```
 
 On the first call create the client. `anthropic.Anthropic()` with no arguments reads credentials from the environment (`ANTHROPIC_API_KEY`); the key is never written in code.
 
-**L41-47**
+**L45-52**
 
 ```python
-41 |         response = self._client.messages.create(
-42 |             model=self._model,
-43 |             max_tokens=self._max_tokens,
-44 |             system=SYSTEM_PROMPT,
-45 |             messages=[{"role": "user", "content": build_user_message(question, results)}],
-46 |             output_config={"effort": "medium"},
-47 |         )
+45 |         try:
+46 |             response = self._client.messages.create(
+47 |                 model=self._model,
+48 |                 max_tokens=self._max_tokens,
+49 |                 system=SYSTEM_PROMPT,
+50 |                 messages=[{"role": "user", "content": build_user_message(question, results)}],
+51 |                 output_config={"effort": "medium"},
+52 |             )
 ```
 
-**The API call.** `model` and `max_tokens` come from config. `system=` carries the fixed instructions. `messages=` holds a single user turn built by `build_user_message`. `output_config={"effort": "medium"}` sets how much the model reasons (a cost/latency dial; Claude Opus 5 also decides adaptively when to think). We deliberately do **not** send `temperature`: current models reject sampling parameters.
+**The API call.** `model` and `max_tokens` come from config. `system=` carries the fixed instructions. `messages=` holds a single user turn built by `build_user_message`. `output_config={"effort": "medium"}` sets how much the model reasons (a cost/latency dial; Claude Opus 5 also decides adaptively when to think). We deliberately do **not** send `temperature`: current models reject sampling parameters. The whole call sits inside a `try` so a missing key can be translated (next block).
 
-**L48-49**
+**L53-56**
 
 ```python
-48 |         if response.stop_reason == "refusal":
-49 |             return "The model declined to answer this request."
+53 |         except TypeError as exc:
+54 |             if "authentication method" in str(exc):
+55 |                 raise MissingCredentialsError("No Claude credentials found. Set ANTHROPIC_API_KEY.") from exc
+56 |             raise
+```
+
+**Turning a cryptic SDK error into a clear one.** With no credentials, the SDK raises `TypeError("Could not resolve authentication method...")` at request time. Without this block that would surface as an unexplained crash or an HTTP 500 with a traceback. We check the message for the phrase `authentication method`, and if it matches, raise `MissingCredentialsError("...Set ANTHROPIC_API_KEY.")` (`from exc` keeps the original attached for debugging). Any *other* `TypeError` is re-raised untouched with a bare `raise`, so real programming bugs are never hidden. **Trade-off:** matching on message text is brittle if the SDK rewords it; the SDK offers no dedicated exception for this case, and a test pins the behaviour.
+
+**L57-58**
+
+```python
+57 |         if response.stop_reason == "refusal":
+58 |             return "The model declined to answer this request."
 ```
 
 If the model's safety systems declined (`stop_reason == "refusal"`), the reply may be empty, so return a safe message instead of crashing. Always check `stop_reason` before trusting `content`.
 
-**L50**
+**L59**
 
 ```python
-50 |         return "".join(block.text for block in response.content if block.type == "text")
+59 |         return "".join(block.text for block in response.content if block.type == "text")
 ```
 
 `response.content` is a *list of blocks* (thinking blocks, text blocks, ...). We keep only blocks whose `type` is `"text"` and join their `.text`. Checking the type first avoids attribute errors on non-text blocks.
 
-**L53-57**
+**L62-66**
 
 ```python
-53 | class ExtractiveLLM:
-54 |     """Offline fallback: no model call, returns the best-matching passage verbatim."""
-55 | 
-56 |     def generate(self, question: str, results: list[SearchResult]) -> str:
-57 |         return f"{results[0].chunk.text} [1]"
+62 | class ExtractiveLLM:
+63 |     """Offline fallback: no model call, returns the best-matching passage verbatim."""
+64 | 
+65 |     def generate(self, question: str, results: list[SearchResult]) -> str:
+66 |         return f"{results[0].chunk.text} [1]"
 ```
 
 `ExtractiveLLM` is a zero-cost offline fallback: no model, it simply returns the best-matching chunk verbatim plus a `[1]` citation. It proves retrieval works on its own, lets the demo run with no key, and makes CI cheap.
 
-**L60-61**
+**L69-70**
 
 ```python
-60 | def build_llm(settings: Settings) -> LLM:
-61 |     provider = settings.llm_provider
+69 | def build_llm(settings: Settings) -> LLM:
+70 |     provider = settings.llm_provider
 ```
 
 `build_llm` is a small **factory function**: it decides which implementation to use, based on config.
 
-**L62-63**
+**L71-72**
 
 ```python
-62 |     if provider == "auto":
-63 |         provider = "claude" if os.getenv("ANTHROPIC_API_KEY") else "extractive"
+71 |     if provider == "auto":
+72 |         provider = "claude" if os.getenv("ANTHROPIC_API_KEY") else "extractive"
 ```
 
 In `auto` mode, use Claude if `ANTHROPIC_API_KEY` is set, otherwise the extractive fallback. (If you authenticate another way, for example `ant auth login`, set `LLM_PROVIDER=claude` explicitly.)
 
-**L64-67**
+**L73-76**
 
 ```python
-64 |     if provider == "claude":
-65 |         return ClaudeLLM(settings.llm_model, settings.max_answer_tokens)
-66 |     if provider == "extractive":
-67 |         return ExtractiveLLM()
+73 |     if provider == "claude":
+74 |         return ClaudeLLM(settings.llm_model, settings.max_answer_tokens)
+75 |     if provider == "extractive":
+76 |         return ExtractiveLLM()
 ```
 
 Explicit choices: return the matching implementation.
 
-**L68**
+**L77**
 
 ```python
-68 |     raise ValueError(f"Unknown LLM_PROVIDER: {settings.llm_provider}")
+77 |     raise ValueError(f"Unknown LLM_PROVIDER: {settings.llm_provider}")
 ```
 
 Any other value is a configuration error: fail immediately and loudly at start-up, not silently later.
@@ -1130,7 +1151,7 @@ The pipeline class.
 33 |         self.settings = settings
 ```
 
-**Dependency injection**: the constructor *receives* its embedder, store, LLM and settings instead of creating them. In production `build_pipeline` (bottom of file) passes real ones; in tests we pass fakes. This is why 33 tests run in half a second with no network.
+**Dependency injection**: the constructor *receives* its embedder, store, LLM and settings instead of creating them. In production `build_pipeline` (bottom of file) passes real ones; in tests we pass fakes. This is why 36 tests run in half a second with no network.
 
 **L35-36**
 
@@ -1308,217 +1329,227 @@ The Anthropic SDK is imported here only for its **typed exception classes**, use
 
 FastAPI building blocks (`Depends` = dependency injection, `File`/`UploadFile` = multipart uploads, `HTTPException` = error responses), pydantic (`BaseModel`, `Field` = request/response validation), and `PdfReadError` for corrupt PDFs.
 
-**L11-13**
+**L11-14**
 
 ```python
 11 | from app.config import Settings
-12 | from app.loader import SUPPORTED_EXTENSIONS, load_bytes
-13 | from app.rag import RagPipeline, build_pipeline
+12 | from app.llm import MissingCredentialsError
+13 | from app.loader import SUPPORTED_EXTENSIONS, load_bytes
+14 | from app.rag import RagPipeline, build_pipeline
 ```
 
-Project imports: settings, loader helpers, and the pipeline plus its builder.
+Project imports: settings, our `MissingCredentialsError` (used to give a clear message when no Claude key is set), loader helpers, and the pipeline plus its builder.
 
-**L15**
+**L16**
 
 ```python
-15 | MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+16 | MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 ```
 
 Upload size cap: 5 MB. Without a limit, one huge upload could exhaust memory.
 
-**L17**
+**L18**
 
 ```python
-17 | app = FastAPI(title="RAG Knowledge Assistant", version="1.0.0")
+18 | app = FastAPI(title="RAG Knowledge Assistant", version="1.0.0")
 ```
 
 Create the app. FastAPI automatically serves interactive docs at `/docs` (Swagger UI) and a machine-readable schema at `/openapi.json`.
 
-**L20-22**
+**L21-23**
 
 ```python
-20 | @lru_cache
-21 | def get_pipeline() -> RagPipeline:
-22 |     return build_pipeline(Settings())
+21 | @lru_cache
+22 | def get_pipeline() -> RagPipeline:
+23 |     return build_pipeline(Settings())
 ```
 
 `get_pipeline` builds the pipeline **once**: `@lru_cache` remembers the result, so every request shares one instance (a singleton). It is expensive (loads the embedding model and the index), so the first request pays a cold start. Endpoints obtain it via `Depends(get_pipeline)`, which is also how tests swap in a fake pipeline (`app.dependency_overrides`).
 
-**L25-26**
+**L26-27**
 
 ```python
-25 | class AskRequest(BaseModel):
-26 |     question: str = Field(min_length=1, max_length=2000)
+26 | class AskRequest(BaseModel):
+27 |     question: str = Field(min_length=1, max_length=2000)
 ```
 
 `AskRequest` is the request body schema. `Field(min_length=1, max_length=2000)` makes pydantic reject empty or oversized questions automatically with HTTP 422, before our code runs.
 
-**L29-33**
+**L30-34**
 
 ```python
-29 | class CitationOut(BaseModel):
-30 |     source: str
-31 |     chunk_index: int
-32 |     score: float
-33 |     text: str
+30 | class CitationOut(BaseModel):
+31 |     source: str
+32 |     chunk_index: int
+33 |     score: float
+34 |     text: str
 ```
 
 `CitationOut`: the JSON shape of one citation.
 
-**L36-39**
+**L37-40**
 
 ```python
-36 | class AskResponse(BaseModel):
-37 |     answer: str
-38 |     grounded: bool
-39 |     citations: list[CitationOut]
+37 | class AskResponse(BaseModel):
+38 |     answer: str
+39 |     grounded: bool
+40 |     citations: list[CitationOut]
 ```
 
 `AskResponse`: the JSON shape of an answer. Declared as `response_model` below so responses are validated, filtered to these fields, and documented in `/docs`.
 
-**L42-44**
+**L43-45**
 
 ```python
-42 | @app.get("/health")
-43 | def health() -> dict[str, str]:
-44 |     return {"status": "ok"}
+43 | @app.get("/health")
+44 | def health() -> dict[str, str]:
+45 |     return {"status": "ok"}
 ```
 
 `GET /health` returns `{"status": "ok"}`. It deliberately does **not** depend on the pipeline, so it is instant and does not force the model to load. Container platforms poll this to decide whether the service is alive.
 
-**L47-49**
+**L48-50**
 
 ```python
-47 | @app.get("/documents")
-48 | def list_documents(pipeline: RagPipeline = Depends(get_pipeline)) -> dict[str, int]:
-49 |     return pipeline.store.sources()
+48 | @app.get("/documents")
+49 | def list_documents(pipeline: RagPipeline = Depends(get_pipeline)) -> dict[str, int]:
+50 |     return pipeline.store.sources()
 ```
 
 `GET /documents` lists what is indexed: source file name and chunk count.
 
-**L52-55**
+**L53-56**
 
 ```python
-52 | @app.post("/documents", status_code=201)
-53 | def upload_document(
-54 |     file: UploadFile = File(...), pipeline: RagPipeline = Depends(get_pipeline)
-55 | ) -> dict[str, int]:
+53 | @app.post("/documents", status_code=201)
+54 | def upload_document(
+55 |     file: UploadFile = File(...), pipeline: RagPipeline = Depends(get_pipeline)
+56 | ) -> dict[str, int]:
 ```
 
 `POST /documents` uploads a file (multipart form data); `status_code=201` means "Created". Note `def`, **not** `async def`: FastAPI runs plain functions in a worker thread pool, so slow blocking work (embedding, network calls) does not freeze the server's event loop for other users.
 
-**L56**
+**L57**
 
 ```python
-56 |     name = Path(file.filename or "").name
+57 |     name = Path(file.filename or "").name
 ```
 
 Sanitise the uploaded file name down to its last component.
 
-**L57-58**
+**L58-59**
 
 ```python
-57 |     if Path(name).suffix.lower() not in SUPPORTED_EXTENSIONS:
-58 |         raise HTTPException(415, f"Supported types: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
+58 |     if Path(name).suffix.lower() not in SUPPORTED_EXTENSIONS:
+59 |         raise HTTPException(415, f"Supported types: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
 ```
 
 Whitelist the extension. Anything else is HTTP **415 Unsupported Media Type**.
 
-**L59**
+**L60**
 
 ```python
-59 |     data = file.file.read(MAX_UPLOAD_BYTES + 1)
+60 |     data = file.file.read(MAX_UPLOAD_BYTES + 1)
 ```
 
 Read at most `MAX_UPLOAD_BYTES + 1` bytes. The extra byte is a trick: if we get more than the limit, the file is too big, and we know it without ever loading a huge file into memory.
 
-**L60-61**
+**L61-62**
 
 ```python
-60 |     if len(data) > MAX_UPLOAD_BYTES:
-61 |         raise HTTPException(413, f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
+61 |     if len(data) > MAX_UPLOAD_BYTES:
+62 |         raise HTTPException(413, f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
 ```
 
 Too big: HTTP **413 Payload Too Large**.
 
-**L62-65**
+**L63-66**
 
 ```python
-62 |     try:
-63 |         document = load_bytes(name, data)
-64 |     except (ValueError, PdfReadError) as exc:
-65 |         raise HTTPException(422, f"Could not read file: {exc}") from exc
+63 |     try:
+64 |         document = load_bytes(name, data)
+65 |     except (ValueError, PdfReadError) as exc:
+66 |         raise HTTPException(422, f"Could not read file: {exc}") from exc
 ```
 
 Try to parse the file. `ValueError` (unsupported type) and `PdfReadError` (corrupt PDF) become HTTP **422 Unprocessable Content**. `from exc` keeps the original error attached for debugging.
 
-**L66-67**
+**L67-68**
 
 ```python
-66 |     if not document.text.strip():
-67 |         raise HTTPException(422, "File contains no extractable text")
+67 |     if not document.text.strip():
+68 |         raise HTTPException(422, "File contains no extractable text")
 ```
 
 A file with no extractable text (for example a scanned PDF) is rejected with 422 rather than silently indexed as nothing.
 
-**L68**
+**L69**
 
 ```python
-68 |     return pipeline.ingest([document])
+69 |     return pipeline.ingest([document])
 ```
 
 Ingest it and return the counts (`{"documents": 1, "chunks": n}`).
 
-**L71-72**
+**L72-73**
 
 ```python
-71 | @app.post("/ask", response_model=AskResponse)
-72 | def ask(request: AskRequest, pipeline: RagPipeline = Depends(get_pipeline)) -> dict:
+72 | @app.post("/ask", response_model=AskResponse)
+73 | def ask(request: AskRequest, pipeline: RagPipeline = Depends(get_pipeline)) -> dict:
 ```
 
 `POST /ask` takes an `AskRequest` (already validated), returns an `AskResponse`.
 
-**L73-74**
+**L74-75**
 
 ```python
-73 |     try:
-74 |         return asdict(pipeline.ask(request.question))
+74 |     try:
+75 |         return asdict(pipeline.ask(request.question))
 ```
 
 Call the pipeline. `asdict` recursively converts the `Answer` dataclass and its nested `Citation` objects into plain dictionaries for JSON.
 
-**L75-76**
+**L76-77**
 
 ```python
-75 |     except anthropic.RateLimitError as exc:
-76 |         raise HTTPException(429, "Model rate limit reached, retry shortly") from exc
+76 |     except MissingCredentialsError as exc:
+77 |         raise HTTPException(500, "Server has no Claude credentials configured (set ANTHROPIC_API_KEY)") from exc
+```
+
+No Claude credentials configured (raised by `llm.py`): return **500** with a message that tells the operator exactly what to fix (`set ANTHROPIC_API_KEY`). It is listed first because it is our own exception and the most common first-run problem.
+
+**L78-79**
+
+```python
+78 |     except anthropic.RateLimitError as exc:
+79 |         raise HTTPException(429, "Model rate limit reached, retry shortly") from exc
 ```
 
 Claude rate limit (HTTP 429 from Anthropic) becomes HTTP **429** for our client, who can retry later.
 
-**L77-78**
+**L80-81**
 
 ```python
-77 |     except anthropic.AuthenticationError as exc:
-78 |         raise HTTPException(500, "Server is missing valid model credentials") from exc
+80 |     except anthropic.AuthenticationError as exc:
+81 |         raise HTTPException(500, "Server is missing valid model credentials") from exc
 ```
 
 Bad or missing API key is *our* configuration problem, not the caller's: return **500** with a generic message (no details leaked).
 
-**L79-80**
+**L82-83**
 
 ```python
-79 |     except anthropic.APIConnectionError as exc:
-80 |         raise HTTPException(503, "Could not reach the model API") from exc
+82 |     except anthropic.APIConnectionError as exc:
+83 |         raise HTTPException(503, "Could not reach the model API") from exc
 ```
 
 Network failure reaching Anthropic: HTTP **503 Service Unavailable**.
 
-**L81-82**
+**L84-85**
 
 ```python
-81 |     except anthropic.APIStatusError as exc:
-82 |         raise HTTPException(502, "The model API returned an error") from exc
+84 |     except anthropic.APIStatusError as exc:
+85 |         raise HTTPException(502, "The model API returned an error") from exc
 ```
 
 Any other error status from Anthropic: HTTP **502 Bad Gateway** (an upstream service failed). **Order matters:** `RateLimitError` and `AuthenticationError` are *subclasses* of `APIStatusError`, so the specific handlers must come before this general one, otherwise they would never run.
@@ -1538,119 +1569,140 @@ A command-line front end for the same pipeline: useful for scripting, demos and 
 
 Docstring.
 
-**L2-3**
+**L2-4**
 
 ```python
 2 | import argparse
-3 | from pathlib import Path
+3 | import sys
+4 | from pathlib import Path
 ```
 
-`argparse` (standard library command-line parser) and `Path`.
+`argparse` (standard library command-line parser), `sys` (needed for the path fix below) and `Path`.
 
-**L5-7**
+**L6-7**
 
 ```python
-5 | from app.config import Settings
-6 | from app.loader import load_directory
-7 | from app.rag import build_pipeline
+6 | if __package__ in (None, ""):  # launched as a plain file, e.g. VS Code's "Run Python File" button
+7 |     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 ```
 
-Reuse the same settings, folder loader and pipeline builder as the API: **one pipeline, two front ends**.
+**Makes the file runnable from VS Code's "Run Python File" button.** When you run `python app/cli.py` directly, `__package__` is empty and Python puts the `app/` folder (not the project root) on `sys.path`, so `from app.config import ...` fails with `ModuleNotFoundError: No module named 'app'`. When run the normal way (`python -m app.cli`) `__package__` is set and this block is skipped. Otherwise we insert the project root (`Path(__file__).resolve().parent.parent`) at the front of the import path.
 
-**L10**
+**L9-12**
 
 ```python
-10 | def main(argv: list[str] | None = None) -> None:
+ 9 | from app.config import Settings  # noqa: E402
+10 | from app.llm import MissingCredentialsError  # noqa: E402
+11 | from app.loader import load_directory  # noqa: E402
+12 | from app.rag import build_pipeline  # noqa: E402
+```
+
+Reuse the same settings, error type, folder loader and pipeline builder as the API: **one pipeline, two front ends**. The `# noqa: E402` comments silence the linter warning "import not at top of file", which is intentional here because the path fix must run first.
+
+**L15**
+
+```python
+15 | def main(argv: list[str] | None = None) -> None:
 ```
 
 `main` accepts an optional argument list. Passing `None` makes argparse read `sys.argv`; tests can pass their own list.
 
-**L11-12**
+**L16-17**
 
 ```python
-11 |     parser = argparse.ArgumentParser(prog="python -m app.cli")
-12 |     commands = parser.add_subparsers(dest="command", required=True)
+16 |     parser = argparse.ArgumentParser(prog="python -m app.cli")
+17 |     commands = parser.add_subparsers(dest="command", required=True)
 ```
 
 Create the parser (`prog` sets the name shown in help). `add_subparsers` creates the `ingest` / `ask` / `stats` sub-commands; `required=True` forces the user to pick one.
 
-**L13-14**
+**L18-19**
 
 ```python
-13 |     ingest = commands.add_parser("ingest", help="index every .txt/.md/.pdf in a folder")
-14 |     ingest.add_argument("directory", type=Path)
+18 |     ingest = commands.add_parser("ingest", help="index every .txt/.md/.pdf in a folder")
+19 |     ingest.add_argument("directory", type=Path)
 ```
 
 `ingest <directory>`: `type=Path` converts the text argument into a `Path`.
 
-**L15-16**
+**L20-21**
 
 ```python
-15 |     ask = commands.add_parser("ask", help="ask a question about the indexed documents")
-16 |     ask.add_argument("question")
+20 |     ask = commands.add_parser("ask", help="ask a question about the indexed documents")
+21 |     ask.add_argument("question")
 ```
 
 `ask "<question>"`.
 
-**L17**
+**L22**
 
 ```python
-17 |     commands.add_parser("stats", help="show what is in the index")
+22 |     commands.add_parser("stats", help="show what is in the index")
 ```
 
 `stats` takes no arguments.
 
-**L18**
+**L23**
 
 ```python
-18 |     args = parser.parse_args(argv)
+23 |     args = parser.parse_args(argv)
 ```
 
 Parse the command line into `args`. Bad input prints usage and exits.
 
-**L20**
+**L25**
 
 ```python
-20 |     pipeline = build_pipeline(Settings())
+25 |     pipeline = build_pipeline(Settings())
 ```
 
 Build the real pipeline (loads the embedding model and any saved index).
 
-**L21-22**
+**L26-27**
 
 ```python
-21 |     if args.command == "ingest":
-22 |         print(pipeline.ingest(load_directory(args.directory)))
+26 |     if args.command == "ingest":
+27 |         print(pipeline.ingest(load_directory(args.directory)))
 ```
 
 `ingest`: read every supported file in the folder, index it, print the counts.
 
-**L23-24**
+**L28-29**
 
 ```python
-23 |     elif args.command == "stats":
-24 |         print(pipeline.store.sources())
+28 |     elif args.command == "stats":
+29 |         print(pipeline.store.sources())
 ```
 
 `stats`: print the source files and their chunk counts.
 
-**L25-29**
+**L30-34**
 
 ```python
-25 |     else:
-26 |         result = pipeline.ask(args.question)
-27 |         print(result.answer)
-28 |         for number, citation in enumerate(result.citations, start=1):
-29 |             print(f"  [{number}] {citation.source} (chunk {citation.chunk_index}, score {citation.score})")
+30 |     else:
+31 |         try:
+32 |             result = pipeline.ask(args.question)
+33 |         except MissingCredentialsError as exc:
+34 |             raise SystemExit(f"error: {exc} (or set LLM_PROVIDER=extractive to run offline)") from exc
 ```
 
-Otherwise it is `ask`: print the answer, then one line per citation with file, chunk number and similarity score.
+Otherwise it is `ask`. The call is wrapped so that a missing API key produces a one-line, actionable message (`SystemExit("error: ...")` exits with a non-zero status and prints just that text) instead of a stack trace, and it suggests the offline alternative.
 
-**L32-33**
+**L35-37**
 
 ```python
-32 | if __name__ == "__main__":
-33 |     main()
+35 |         print(result.answer)
+36 |         for number, citation in enumerate(result.citations, start=1):
+37 |             print(f"  [{number}] {citation.source} (chunk {citation.chunk_index}, score {citation.score})")
+```
+
+Print the answer, then one line per citation with file, chunk number and similarity score.
+
+**L40-41**
+
+```python
+40 | if __name__ == "__main__":
+41 |     main()
 ```
 
 Standard guard so `python -m app.cli ...` runs `main()`, but importing the module does not.
@@ -1663,66 +1715,69 @@ Standard guard so `python -m app.cli ...` runs `main()`, but importing the modul
 Retrieval evaluation: measures whether the *retrieval* half of the system works, with no LLM calls and therefore no cost.
 The single most useful habit in RAG work: measure retrieval separately from generation.
 
-**header** (L1-11)
+**header** (L1-14)
 
 ```python
  1 | """Retrieval evaluation: does the right document appear in the top-k results? (No LLM calls, no cost.)"""
  2 | import json
- 3 | from pathlib import Path
- 4 | 
- 5 | from app.chunker import chunk_document
- 6 | from app.config import Settings
- 7 | from app.embeddings import FastEmbedEmbedder
- 8 | from app.loader import load_directory
- 9 | from app.vector_store import VectorStore
-10 | 
-11 | ROOT = Path(__file__).resolve().parent.parent
+ 3 | import sys
+ 4 | from pathlib import Path
+ 5 | 
+ 6 | ROOT = Path(__file__).resolve().parent.parent
+ 7 | if __package__ in (None, ""):  # launched as a plain file, e.g. VS Code's "Run Python File" button
+ 8 |     sys.path.insert(0, str(ROOT))
+ 9 | 
+10 | from app.chunker import chunk_document  # noqa: E402
+11 | from app.config import Settings  # noqa: E402
+12 | from app.embeddings import FastEmbedEmbedder  # noqa: E402
+13 | from app.loader import load_directory  # noqa: E402
+14 | from app.vector_store import VectorStore  # noqa: E402
 ```
 
-Imports and `ROOT` (the project folder, found relative to this file so the script works from any directory).
+Imports, `ROOT` (the project folder, found relative to this file so the script works from any directory) and the same path fix as `cli.py`, so the file also runs from VS Code's "Run Python File" button (`__package__` is empty only when launched as a plain file).
 
-**`main`** (L14-43)
+**`main`** (L17-46)
 
 ```python
-14 | def main() -> None:
-15 |     settings = Settings()
-16 |     embedder = FastEmbedEmbedder(settings.embedding_model)
-17 |     store = VectorStore()
-18 |     for document in load_directory(ROOT / "data" / "sample_docs"):
-19 |         chunks = chunk_document(document, settings.chunk_size, settings.chunk_overlap)
-20 |         store.add(chunks, embedder.embed_documents([c.text for c in chunks]))
-21 | 
-22 |     pairs = json.loads((ROOT / "eval" / "qa_pairs.json").read_text(encoding="utf-8"))
-23 |     answerable = [p for p in pairs if p["expected_source"]]
-24 |     unanswerable = [p for p in pairs if not p["expected_source"]]
-25 | 
-26 |     hits, reciprocal_ranks = 0, []
-27 |     for pair in answerable:
-28 |         results = store.search(embedder.embed_query(pair["question"]), settings.top_k, min_score=0.0)
-29 |         sources = [r.chunk.source for r in results]
-30 |         rank = sources.index(pair["expected_source"]) + 1 if pair["expected_source"] in sources else None
-31 |         hits += rank is not None
-32 |         reciprocal_ranks.append(1 / rank if rank else 0.0)
-33 |         print(f"{'PASS' if rank else 'FAIL'}  rank={rank}  {pair['question']}")
-34 | 
-35 |     refused = 0
-36 |     for pair in unanswerable:
-37 |         results = store.search(embedder.embed_query(pair["question"]), settings.top_k, settings.min_score)
-38 |         refused += not results
-39 |         print(f"{'PASS' if not results else 'FAIL'}  (should be refused)  {pair['question']}")
-40 | 
-41 |     print(f"\nhit@{settings.top_k}: {hits}/{len(answerable)} = {hits / len(answerable):.0%}")
-42 |     print(f"MRR: {sum(reciprocal_ranks) / len(answerable):.3f}")
-43 |     print(f"correctly refused at MIN_SCORE={settings.min_score}: {refused}/{len(unanswerable)}")
+17 | def main() -> None:
+18 |     settings = Settings()
+19 |     embedder = FastEmbedEmbedder(settings.embedding_model)
+20 |     store = VectorStore()
+21 |     for document in load_directory(ROOT / "data" / "sample_docs"):
+22 |         chunks = chunk_document(document, settings.chunk_size, settings.chunk_overlap)
+23 |         store.add(chunks, embedder.embed_documents([c.text for c in chunks]))
+24 | 
+25 |     pairs = json.loads((ROOT / "eval" / "qa_pairs.json").read_text(encoding="utf-8"))
+26 |     answerable = [p for p in pairs if p["expected_source"]]
+27 |     unanswerable = [p for p in pairs if not p["expected_source"]]
+28 | 
+29 |     hits, reciprocal_ranks = 0, []
+30 |     for pair in answerable:
+31 |         results = store.search(embedder.embed_query(pair["question"]), settings.top_k, min_score=0.0)
+32 |         sources = [r.chunk.source for r in results]
+33 |         rank = sources.index(pair["expected_source"]) + 1 if pair["expected_source"] in sources else None
+34 |         hits += rank is not None
+35 |         reciprocal_ranks.append(1 / rank if rank else 0.0)
+36 |         print(f"{'PASS' if rank else 'FAIL'}  rank={rank}  {pair['question']}")
+37 | 
+38 |     refused = 0
+39 |     for pair in unanswerable:
+40 |         results = store.search(embedder.embed_query(pair["question"]), settings.top_k, settings.min_score)
+41 |         refused += not results
+42 |         print(f"{'PASS' if not results else 'FAIL'}  (should be refused)  {pair['question']}")
+43 | 
+44 |     print(f"\nhit@{settings.top_k}: {hits}/{len(answerable)} = {hits / len(answerable):.0%}")
+45 |     print(f"MRR: {sum(reciprocal_ranks) / len(answerable):.3f}")
+46 |     print(f"correctly refused at MIN_SCORE={settings.min_score}: {refused}/{len(unanswerable)}")
 ```
 
 Builds a throw-away in-memory index of `data/sample_docs`, then runs every question in `eval/qa_pairs.json`. **Answerable** questions name the document that should contain the answer; the metric is **hit@k** (was the right document among the top-k results?) and **MRR** (mean reciprocal rank: 1 if the right document is first, 0.5 if second, and so on). **Unanswerable** questions (`expected_source` is `null`) must be *refused* at `MIN_SCORE`: that is what proves the threshold works. Current result: hit@4 = 12/12, MRR = 0.958, refused 5/5.
 
-**entry point** (L46-47)
+**entry point** (L49-50)
 
 ```python
-46 | if __name__ == "__main__":
-47 |     main()
+49 | if __name__ == "__main__":
+50 |     main()
 ```
 
 Runs `main()` only when the file is executed directly (`python -m eval.run_eval`), not when imported.
@@ -2121,7 +2176,7 @@ Tests for the generation layer, using a stub client so no real API call is made.
  4 | 
  5 | from app.chunker import Chunk
  6 | from app.config import Settings
- 7 | from app.llm import SYSTEM_PROMPT, ClaudeLLM, ExtractiveLLM, build_llm
+ 7 | from app.llm import SYSTEM_PROMPT, ClaudeLLM, ExtractiveLLM, MissingCredentialsError, build_llm
  8 | from app.vector_store import SearchResult
  9 | 
 10 | RESULTS = [SearchResult(Chunk("leave.md", 0, "25 days of annual leave."), 0.9)]
@@ -2129,7 +2184,7 @@ Tests for the generation layer, using a stub client so no real API call is made.
 
 Imports and a shared `RESULTS` list (one retrieved chunk).
 
-**`StubClient`** (L13-23)
+**`StubClient`** (L13-25)
 
 ```python
 13 | class StubClient:
@@ -2142,88 +2197,112 @@ Imports and a shared `RESULTS` list (one retrieved chunk).
 20 | 
 21 |     def _create(self, **kwargs):
 22 |         self.calls.append(kwargs)
-23 |         return self._response
+23 |         if isinstance(self._response, Exception):
+24 |             raise self._response
+25 |         return self._response
 ```
 
-Imitates `anthropic.Anthropic`: it exposes `messages.create(...)`, records the arguments it was called with, and returns a canned response.
+Imitates `anthropic.Anthropic`: it exposes `messages.create(...)`, records the arguments it was called with, and returns a canned response (or raises it, if the canned value is an exception).
 
-**`claude_with`** (L26-29)
+**`claude_with`** (L28-31)
 
 ```python
-26 | def claude_with(response):
-27 |     llm = ClaudeLLM("claude-opus-5", 1000)
-28 |     llm._client = StubClient(response)
-29 |     return llm
+28 | def claude_with(response):
+29 |     llm = ClaudeLLM("claude-opus-5", 1000)
+30 |     llm._client = StubClient(response)
+31 |     return llm
 ```
 
 Helper: builds a `ClaudeLLM` and injects the stub client (possible because the client is a replaceable attribute).
 
-**`test_claude_request_is_grounded_and_text_blocks_are_joined`** (L32-42)
+**`test_claude_request_is_grounded_and_text_blocks_are_joined`** (L34-44)
 
 ```python
-32 | def test_claude_request_is_grounded_and_text_blocks_are_joined():
-33 |     response = SimpleNamespace(
-34 |         stop_reason="end_turn",
-35 |         content=[SimpleNamespace(type="thinking"), SimpleNamespace(type="text", text="25 days [1].")],
-36 |     )
-37 |     llm = claude_with(response)
-38 |     assert llm.generate("How many days?", RESULTS) == "25 days [1]."
-39 |     call = llm._client.calls[0]
-40 |     assert call["model"] == "claude-opus-5" and call["max_tokens"] == 1000
-41 |     assert call["system"] == SYSTEM_PROMPT
-42 |     assert "[1] (source: leave.md)" in call["messages"][0]["content"]
+34 | def test_claude_request_is_grounded_and_text_blocks_are_joined():
+35 |     response = SimpleNamespace(
+36 |         stop_reason="end_turn",
+37 |         content=[SimpleNamespace(type="thinking"), SimpleNamespace(type="text", text="25 days [1].")],
+38 |     )
+39 |     llm = claude_with(response)
+40 |     assert llm.generate("How many days?", RESULTS) == "25 days [1]."
+41 |     call = llm._client.calls[0]
+42 |     assert call["model"] == "claude-opus-5" and call["max_tokens"] == 1000
+43 |     assert call["system"] == SYSTEM_PROMPT
+44 |     assert "[1] (source: leave.md)" in call["messages"][0]["content"]
 ```
 
 Checks the request sent to Claude (model, `max_tokens`, system prompt, numbered passage in the user message) and that only `text` blocks are returned, ignoring a `thinking` block.
 
-**`test_claude_refusal_stop_reason_returns_a_safe_message`** (L45-47)
+**`test_claude_refusal_stop_reason_returns_a_safe_message`** (L47-49)
 
 ```python
-45 | def test_claude_refusal_stop_reason_returns_a_safe_message():
-46 |     llm = claude_with(SimpleNamespace(stop_reason="refusal", content=[]))
-47 |     assert "declined" in llm.generate("q", RESULTS)
+47 | def test_claude_refusal_stop_reason_returns_a_safe_message():
+48 |     llm = claude_with(SimpleNamespace(stop_reason="refusal", content=[]))
+49 |     assert "declined" in llm.generate("q", RESULTS)
 ```
 
 A `refusal` stop reason yields a safe message rather than an error.
 
-**`test_extractive_llm_returns_top_passage_with_citation`** (L50-51)
+**`test_extractive_llm_returns_top_passage_with_citation`** (L52-53)
 
 ```python
-50 | def test_extractive_llm_returns_top_passage_with_citation():
-51 |     assert ExtractiveLLM().generate("q", RESULTS) == "25 days of annual leave. [1]"
+52 | def test_extractive_llm_returns_top_passage_with_citation():
+53 |     assert ExtractiveLLM().generate("q", RESULTS) == "25 days of annual leave. [1]"
 ```
 
 The offline fallback returns the top chunk plus `[1]`.
 
-**`test_auto_provider_uses_extractive_without_api_key`** (L54-56)
+**`test_auto_provider_uses_extractive_without_api_key`** (L56-58)
 
 ```python
-54 | def test_auto_provider_uses_extractive_without_api_key(monkeypatch):
-55 |     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-56 |     assert isinstance(build_llm(Settings(llm_provider="auto")), ExtractiveLLM)
+56 | def test_auto_provider_uses_extractive_without_api_key(monkeypatch):
+57 |     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+58 |     assert isinstance(build_llm(Settings(llm_provider="auto")), ExtractiveLLM)
 ```
 
 `monkeypatch.delenv` removes the key: auto mode must choose the extractive fallback.
 
-**`test_auto_provider_uses_claude_with_api_key`** (L59-61)
+**`test_auto_provider_uses_claude_with_api_key`** (L61-63)
 
 ```python
-59 | def test_auto_provider_uses_claude_with_api_key(monkeypatch):
-60 |     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-61 |     assert isinstance(build_llm(Settings(llm_provider="auto")), ClaudeLLM)
+61 | def test_auto_provider_uses_claude_with_api_key(monkeypatch):
+62 |     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+63 |     assert isinstance(build_llm(Settings(llm_provider="auto")), ClaudeLLM)
 ```
 
 With a (fake) key set, auto mode must choose `ClaudeLLM`.
 
-**`test_unknown_provider_is_rejected`** (L64-66)
+**`test_unknown_provider_is_rejected`** (L66-68)
 
 ```python
-64 | def test_unknown_provider_is_rejected():
-65 |     with pytest.raises(ValueError):
-66 |         build_llm(Settings(llm_provider="nonsense"))
+66 | def test_unknown_provider_is_rejected():
+67 |     with pytest.raises(ValueError):
+68 |         build_llm(Settings(llm_provider="nonsense"))
 ```
 
 A misspelt provider fails fast with `ValueError`.
+
+**`test_missing_api_key_becomes_a_clear_error`** (L71-75)
+
+```python
+71 | def test_missing_api_key_becomes_a_clear_error():
+72 |     # The SDK raises a bare TypeError with this message when no credentials are configured.
+73 |     sdk_error = TypeError("Could not resolve authentication method. Expected one of api_key, auth_token, or credentials to be set.")
+74 |     with pytest.raises(MissingCredentialsError, match="ANTHROPIC_API_KEY"):
+75 |         claude_with(sdk_error).generate("q", RESULTS)
+```
+
+Feeds the stub the exact `TypeError` the real SDK raises when no key is set (observed by running the real SDK with no credentials) and asserts we convert it to `MissingCredentialsError` mentioning `ANTHROPIC_API_KEY`.
+
+**`test_unrelated_type_errors_are_not_swallowed`** (L78-80)
+
+```python
+78 | def test_unrelated_type_errors_are_not_swallowed():
+79 |     with pytest.raises(TypeError, match="something else"):
+80 |         claude_with(TypeError("something else")).generate("q", RESULTS)
+```
+
+The counter-test: a *different* `TypeError` must pass through unchanged, proving the `except` block does not hide genuine bugs.
 
 
 ---
@@ -2232,7 +2311,7 @@ A misspelt provider fails fast with `ValueError`.
 
 HTTP-level tests using FastAPI's `TestClient`, which calls the app in-process (no server, no network).
 
-**header** (L1-6)
+**header** (L1-7)
 
 ```python
 1 | import anthropic
@@ -2241,96 +2320,111 @@ HTTP-level tests using FastAPI's `TestClient`, which calls the app in-process (n
 4 | from fastapi.testclient import TestClient
 5 | 
 6 | from app.api import app, get_pipeline
+7 | from app.llm import MissingCredentialsError
 ```
 
 Imports, including `anthropic` and `httpx` to build a realistic 429 error.
 
-**`client`** (L9-13)
+**`client`** (L10-14)
 
 ```python
- 9 | @pytest.fixture
-10 | def client(pipeline):
-11 |     app.dependency_overrides[get_pipeline] = lambda: pipeline
-12 |     yield TestClient(app)
-13 |     app.dependency_overrides.clear()
+10 | @pytest.fixture
+11 | def client(pipeline):
+12 |     app.dependency_overrides[get_pipeline] = lambda: pipeline
+13 |     yield TestClient(app)
+14 |     app.dependency_overrides.clear()
 ```
 
 Fixture: overrides the `get_pipeline` dependency with the test pipeline (fakes), then clears the override afterwards.
 
-**`test_health`** (L16-17)
+**`test_health`** (L17-18)
 
 ```python
-16 | def test_health(client):
-17 |     assert client.get("/health").json() == {"status": "ok"}
+17 | def test_health(client):
+18 |     assert client.get("/health").json() == {"status": "ok"}
 ```
 
 `/health` returns `{"status": "ok"}`.
 
-**`test_upload_then_ask_returns_cited_answer`** (L20-25)
+**`test_upload_then_ask_returns_cited_answer`** (L21-26)
 
 ```python
-20 | def test_upload_then_ask_returns_cited_answer(client):
-21 |     upload = client.post("/documents", files={"file": ("leave.md", b"Employees receive 25 days of annual leave.")})
-22 |     assert upload.status_code == 201 and upload.json()["chunks"] == 1
-23 |     assert client.get("/documents").json() == {"leave.md": 1}
-24 |     body = client.post("/ask", json={"question": "How many days of annual leave?"}).json()
-25 |     assert body["grounded"] and body["citations"][0]["source"] == "leave.md"
+21 | def test_upload_then_ask_returns_cited_answer(client):
+22 |     upload = client.post("/documents", files={"file": ("leave.md", b"Employees receive 25 days of annual leave.")})
+23 |     assert upload.status_code == 201 and upload.json()["chunks"] == 1
+24 |     assert client.get("/documents").json() == {"leave.md": 1}
+25 |     body = client.post("/ask", json={"question": "How many days of annual leave?"}).json()
+26 |     assert body["grounded"] and body["citations"][0]["source"] == "leave.md"
 ```
 
 End-to-end through HTTP: upload a file (201, one chunk), list documents, ask a question, and check the answer is grounded and cites `leave.md`.
 
-**`test_unsupported_file_type_is_rejected`** (L28-29)
+**`test_unsupported_file_type_is_rejected`** (L29-30)
 
 ```python
-28 | def test_unsupported_file_type_is_rejected(client):
-29 |     assert client.post("/documents", files={"file": ("x.exe", b"nope")}).status_code == 415
+29 | def test_unsupported_file_type_is_rejected(client):
+30 |     assert client.post("/documents", files={"file": ("x.exe", b"nope")}).status_code == 415
 ```
 
 An `.exe` upload returns 415.
 
-**`test_empty_file_is_rejected`** (L32-33)
+**`test_empty_file_is_rejected`** (L33-34)
 
 ```python
-32 | def test_empty_file_is_rejected(client):
-33 |     assert client.post("/documents", files={"file": ("empty.txt", b"   ")}).status_code == 422
+33 | def test_empty_file_is_rejected(client):
+34 |     assert client.post("/documents", files={"file": ("empty.txt", b"   ")}).status_code == 422
 ```
 
 A whitespace-only file returns 422.
 
-**`test_oversized_file_is_rejected`** (L36-38)
+**`test_oversized_file_is_rejected`** (L37-39)
 
 ```python
-36 | def test_oversized_file_is_rejected(client):
-37 |     big = b"a" * (5 * 1024 * 1024 + 1)
-38 |     assert client.post("/documents", files={"file": ("big.txt", big)}).status_code == 413
+37 | def test_oversized_file_is_rejected(client):
+38 |     big = b"a" * (5 * 1024 * 1024 + 1)
+39 |     assert client.post("/documents", files={"file": ("big.txt", big)}).status_code == 413
 ```
 
 A file one byte over 5 MB returns 413.
 
-**`test_empty_question_fails_validation`** (L41-42)
+**`test_empty_question_fails_validation`** (L42-43)
 
 ```python
-41 | def test_empty_question_fails_validation(client):
-42 |     assert client.post("/ask", json={"question": ""}).status_code == 422
+42 | def test_empty_question_fails_validation(client):
+43 |     assert client.post("/ask", json={"question": ""}).status_code == 422
 ```
 
 An empty question returns 422 from pydantic validation.
 
-**`test_rate_limit_from_model_maps_to_429`** (L45-53)
+**`test_rate_limit_from_model_maps_to_429`** (L46-54)
 
 ```python
-45 | def test_rate_limit_from_model_maps_to_429(client, pipeline):
-46 |     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-47 |     response = httpx.Response(429, request=request)
-48 | 
-49 |     def boom(question):
-50 |         raise anthropic.RateLimitError("slow down", response=response, body=None)
-51 | 
-52 |     pipeline.ask = boom
-53 |     assert client.post("/ask", json={"question": "hi"}).status_code == 429
+46 | def test_rate_limit_from_model_maps_to_429(client, pipeline):
+47 |     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+48 |     response = httpx.Response(429, request=request)
+49 | 
+50 |     def boom(question):
+51 |         raise anthropic.RateLimitError("slow down", response=response, body=None)
+52 | 
+53 |     pipeline.ask = boom
+54 |     assert client.post("/ask", json={"question": "hi"}).status_code == 429
 ```
 
 Simulates Anthropic returning 429: our API must return 429 too (proves the error-mapping chain).
+
+**`test_missing_credentials_maps_to_500_with_a_helpful_message`** (L57-63)
+
+```python
+57 | def test_missing_credentials_maps_to_500_with_a_helpful_message(client, pipeline):
+58 |     def boom(question):
+59 |         raise MissingCredentialsError("No Claude credentials found. Set ANTHROPIC_API_KEY.")
+60 | 
+61 |     pipeline.ask = boom
+62 |     response = client.post("/ask", json={"question": "hi"})
+63 |     assert response.status_code == 500 and "ANTHROPIC_API_KEY" in response.json()["detail"]
+```
+
+When the pipeline raises `MissingCredentialsError`, the API returns 500 and the response body mentions `ANTHROPIC_API_KEY`, so an operator knows what to fix.
 
 
 ---

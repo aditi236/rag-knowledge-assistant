@@ -1,0 +1,45 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API (uvicorn, reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.api:app", "--reload", "--port", "8000"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      "name": "CLI: ingest sample docs",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.cli",
+      "args": ["ingest", "data/sample_docs"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "CLI: ask a question",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.cli",
+      "args": ["ask", "${input:question}"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Retrieval eval",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "eval.run_eval",
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "question",
+      "type": "promptString",
+      "description": "Question to ask the indexed documents",
+      "default": "What is the hotel cap in London?"
+    }
+  ]
+}

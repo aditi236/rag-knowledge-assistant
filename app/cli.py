@@ -1,10 +1,15 @@
 """Command-line interface: ingest a folder, ask a question, or show index stats."""
 import argparse
+import sys
 from pathlib import Path
 
-from app.config import Settings
-from app.loader import load_directory
-from app.rag import build_pipeline
+if __package__ in (None, ""):  # launched as a plain file, e.g. VS Code's "Run Python File" button
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.config import Settings  # noqa: E402
+from app.llm import MissingCredentialsError  # noqa: E402
+from app.loader import load_directory  # noqa: E402
+from app.rag import build_pipeline  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -23,7 +28,10 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "stats":
         print(pipeline.store.sources())
     else:
-        result = pipeline.ask(args.question)
+        try:
+            result = pipeline.ask(args.question)
+        except MissingCredentialsError as exc:
+            raise SystemExit(f"error: {exc} (or set LLM_PROVIDER=extractive to run offline)") from exc
         print(result.answer)
         for number, citation in enumerate(result.citations, start=1):
             print(f"  [{number}] {citation.source} (chunk {citation.chunk_index}, score {citation.score})")

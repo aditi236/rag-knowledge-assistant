@@ -1,14 +1,17 @@
 """Retrieval evaluation: does the right document appear in the top-k results? (No LLM calls, no cost.)"""
 import json
+import sys
 from pathlib import Path
 
-from app.chunker import chunk_document
-from app.config import Settings
-from app.embeddings import FastEmbedEmbedder
-from app.loader import load_directory
-from app.vector_store import VectorStore
-
 ROOT = Path(__file__).resolve().parent.parent
+if __package__ in (None, ""):  # launched as a plain file, e.g. VS Code's "Run Python File" button
+    sys.path.insert(0, str(ROOT))
+
+from app.chunker import chunk_document  # noqa: E402
+from app.config import Settings  # noqa: E402
+from app.embeddings import FastEmbedEmbedder  # noqa: E402
+from app.loader import load_directory  # noqa: E402
+from app.vector_store import VectorStore  # noqa: E402
 
 
 def main() -> None:

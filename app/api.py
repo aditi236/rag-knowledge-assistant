@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from pypdf.errors import PdfReadError
 
 from app.config import Settings
+from app.llm import MissingCredentialsError
 from app.loader import SUPPORTED_EXTENSIONS, load_bytes
 from app.rag import RagPipeline, build_pipeline
 
@@ -72,6 +73,8 @@ def upload_document(
 def ask(request: AskRequest, pipeline: RagPipeline = Depends(get_pipeline)) -> dict:
     try:
         return asdict(pipeline.ask(request.question))
+    except MissingCredentialsError as exc:
+        raise HTTPException(500, "Server has no Claude credentials configured (set ANTHROPIC_API_KEY)") from exc
     except anthropic.RateLimitError as exc:
         raise HTTPException(429, "Model rate limit reached, retry shortly") from exc
     except anthropic.AuthenticationError as exc:

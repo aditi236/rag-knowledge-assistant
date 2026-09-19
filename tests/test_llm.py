@@ -4,7 +4,7 @@ import pytest
 
 from app.chunker import Chunk
 from app.config import Settings
-from app.llm import SYSTEM_PROMPT, ClaudeLLM, ExtractiveLLM, build_llm
+from app.llm import SYSTEM_PROMPT, ClaudeLLM, ExtractiveLLM, MissingCredentialsError, build_llm
 from app.vector_store import SearchResult
 
 RESULTS = [SearchResult(Chunk("leave.md", 0, "25 days of annual leave."), 0.9)]
@@ -20,6 +20,8 @@ class StubClient:
 
     def _create(self, **kwargs):
         self.calls.append(kwargs)
+        if isinstance(self._response, Exception):
+            raise self._response
         return self._response
 
 
@@ -64,3 +66,15 @@ def test_auto_provider_uses_claude_with_api_key(monkeypatch):
 def test_unknown_provider_is_rejected():
     with pytest.raises(ValueError):
         build_llm(Settings(llm_provider="nonsense"))
+
+
+def test_missing_api_key_becomes_a_clear_error():
+    # The SDK raises a bare TypeError with this message when no credentials are configured.
+    sdk_error = TypeError("Could not resolve authentication method. Expected one of api_key, auth_token, or credentials to be set.")
+    with pytest.raises(MissingCredentialsError, match="ANTHROPIC_API_KEY"):
+        claude_with(sdk_error).generate("q", RESULTS)
+
+
+def test_unrelated_type_errors_are_not_swallowed():
+    with pytest.raises(TypeError, match="something else"):
+        claude_with(TypeError("something else")).generate("q", RESULTS)

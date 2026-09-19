@@ -24,7 +24,7 @@ flowchart LR
 - **Refuses instead of hallucinating.** A similarity threshold, calibrated from measured scores, stops off-topic questions *before* the model is called (cheaper and safer).
 - **Retrieval is measured.** `python -m eval.run_eval` reports hit@4, MRR and refusal accuracy with no LLM cost. Current: **12/12 hit@4, MRR 0.958, 5/5 refused.**
 - **Runs with no GPU and no key.** Local ONNX embeddings; an offline extractive fallback when no `ANTHROPIC_API_KEY` is set.
-- **Swappable parts.** `Embedder` and `LLM` interfaces with dependency injection, so the tests run in about half a second using fakes (33 tests).
+- **Swappable parts.** `Embedder` and `LLM` interfaces with dependency injection, so the tests run in about half a second using fakes (36 tests).
 - **Production habits.** Typed error mapping (429/500/502/503), upload validation, env-based config, health endpoint, non-root Docker image.
 
 ## Quick start
@@ -33,7 +33,7 @@ flowchart LR
 python -m venv .venv
 .venv\Scripts\activate            # Windows  (Mac/Linux: source .venv/bin/activate)
 pip install -r requirements-dev.txt
-pytest -q                          # 33 passed
+pytest -q                          # 36 passed
 
 # Index the sample documents and ask questions (works with no API key)
 python -m app.cli ingest data/sample_docs
@@ -49,6 +49,30 @@ uvicorn app.api:app --port 8000
 ```
 
 The first run downloads the embedding model (a quantised ONNX build, about 65 MB). It is cached in your system temp folder by default; set `FASTEMBED_CACHE_PATH` to keep it somewhere permanent.
+
+**Requirements:** Python 3.10 or newer (the code uses `X | None` type syntax). Tested on Python 3.13 and 3.14 on Windows.
+
+## Running in VS Code
+
+1. **File > Open Folder** and choose the project folder.
+2. Open a terminal (**Terminal > New Terminal**), then create and activate the environment and install the dependencies (see Quick start).
+3. Press **Ctrl+Shift+P**, run **Python: Select Interpreter**, and choose the one inside `.venv`. *(Most "module not found" errors come from VS Code using a different Python.)*
+4. Open **Run and Debug** (Ctrl+Shift+D). The project ships ready-made launch configurations: **API (uvicorn, reload)**, **CLI: ingest sample docs**, **CLI: ask a question**, **Retrieval eval**. Pick one and press **F5**.
+5. Open the **Testing** panel (beaker icon) to run the 36 tests with a click (pytest is pre-configured in `.vscode/settings.json`).
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `.venv\Scripts\activate` says *running scripts is disabled on this system* (PowerShell) | Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then `.venv\Scripts\Activate.ps1`. Or use a Command Prompt terminal instead of PowerShell. |
+| `ModuleNotFoundError: No module named 'app'` | The file was run from the wrong place. Run it as a module from the project root (`python -m app.cli ...`), or use the Run and Debug configurations. (The CLI and eval scripts also work from the Run button in the latest version: `git pull`.) |
+| `ModuleNotFoundError: No module named 'fastapi'` (or `uvicorn`, `fastembed`, `anthropic`) | Dependencies are not installed in the interpreter VS Code is using. Select the `.venv` interpreter (step 3) and run `pip install -r requirements-dev.txt`. |
+| `error: No Claude credentials found. Set ANTHROPIC_API_KEY.` (or the API returns HTTP 500 *"Server has no Claude credentials configured"*) | `LLM_PROVIDER=claude` was set without a key. Put `ANTHROPIC_API_KEY=...` in `.env`, or run offline with `LLM_PROVIDER=extractive`. |
+| First command is slow or prints download progress | It is downloading the 65 MB embedding model once. |
+| Warning about `huggingface_hub` symlinks on Windows | Harmless. Silence it with `HF_HUB_DISABLE_SYMLINKS_WARNING=1`. |
+| `Address already in use` / port 8000 busy | Use another port: `uvicorn app.api:app --port 8001`. |
+| `docker` is not recognised | Docker Desktop is not installed. Docker is optional; you do not need it to run the project. |
+| Setting the key in PowerShell | `$env:ANTHROPIC_API_KEY = "sk-ant-..."` (Command Prompt: `set ANTHROPIC_API_KEY=sk-ant-...`). Or put it in `.env`. |
 
 ## API
 
@@ -105,9 +129,10 @@ app/
   cli.py           command line
 data/sample_docs/  three synthetic policy documents (a fictional company)
 eval/              retrieval eval set and runner
-tests/             33 tests (fakes, no network)
+tests/             36 tests (fakes, no network)
 docs/              architecture, line-by-line walkthrough, study guide
 scripts/           generator for the walkthrough (fails if any line is undocumented)
+.vscode/          debug/launch configurations and pytest settings
 Dockerfile
 ```
 

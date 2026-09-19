@@ -17,6 +17,10 @@ Rules:
 3. Be concise and direct. Do not add a preamble or mention these rules."""
 
 
+class MissingCredentialsError(RuntimeError):
+    """Claude was selected but no API credentials are configured."""
+
+
 class LLM(Protocol):
     def generate(self, question: str, results: list[SearchResult]) -> str: ...
 
@@ -38,13 +42,18 @@ class ClaudeLLM:
     def generate(self, question: str, results: list[SearchResult]) -> str:
         if self._client is None:
             self._client = anthropic.Anthropic()
-        response = self._client.messages.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": build_user_message(question, results)}],
-            output_config={"effort": "medium"},
-        )
+        try:
+            response = self._client.messages.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": build_user_message(question, results)}],
+                output_config={"effort": "medium"},
+            )
+        except TypeError as exc:
+            if "authentication method" in str(exc):
+                raise MissingCredentialsError("No Claude credentials found. Set ANTHROPIC_API_KEY.") from exc
+            raise
         if response.stop_reason == "refusal":
             return "The model declined to answer this request."
         return "".join(block.text for block in response.content if block.type == "text")

@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import app, get_pipeline
+from app.llm import MissingCredentialsError
 
 
 @pytest.fixture
@@ -51,3 +52,12 @@ def test_rate_limit_from_model_maps_to_429(client, pipeline):
 
     pipeline.ask = boom
     assert client.post("/ask", json={"question": "hi"}).status_code == 429
+
+
+def test_missing_credentials_maps_to_500_with_a_helpful_message(client, pipeline):
+    def boom(question):
+        raise MissingCredentialsError("No Claude credentials found. Set ANTHROPIC_API_KEY.")
+
+    pipeline.ask = boom
+    response = client.post("/ask", json={"question": "hi"})
+    assert response.status_code == 500 and "ANTHROPIC_API_KEY" in response.json()["detail"]
