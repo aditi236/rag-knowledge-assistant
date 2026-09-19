@@ -197,7 +197,7 @@ classDiagram
 | 3 | **Unit-length vectors + dot product** | Compute cosine explicitly each time | Search becomes a single fast matrix multiply | Must remember to normalise everything |
 | 4 | **Similarity threshold** (`MIN_SCORE`) before calling the LLM | Always call the LLM and rely on the prompt to refuse | Cheaper, faster, and removes hallucination risk for off-topic input | A fixed threshold can wrongly refuse a valid but oddly-phrased question; needs calibration (see section 8) |
 | 5 | **Strict grounding prompt** with numbered context and `[n]` citations | Free-form prompt | Verifiable answers; exact refusal sentence | Reduces but does not eliminate hallucination; the model can still mis-cite |
-| 6 | **Interfaces + dependency injection** (`Embedder`, `LLM`) | Hard-wire the concrete classes | Swappable parts; tests use fakes (38 tests in about half a second, no network) | A little more structure than a script |
+| 6 | **Interfaces + dependency injection** (`Embedder`, `LLM`) | Hard-wire the concrete classes | Swappable parts; tests use fakes (39 tests in about half a second, no network) | A little more structure than a script |
 | 7 | **Offline extractive fallback** LLM | Fail if no API key | The whole project runs and demos with no key or cost; CI is free | Fallback answers are raw passages, not synthesised |
 | 8 | **Lazy Claude client** | Create the client at import time | App starts, serves `/health`, accepts uploads even without a key | Missing key is discovered at first question |
 | 9 | **Sync endpoints** (`def`, not `async def`) | Async endpoints | Embedding is CPU-bound and the SDK call is blocking; FastAPI runs sync endpoints in a thread pool so the event loop is never blocked | One thread per in-flight request |

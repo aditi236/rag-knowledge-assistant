@@ -179,7 +179,7 @@ in two flows: **ingest** (index documents) and **ask** (retrieve, then generate)
         (13, 18, r"""`Citation`: one piece of evidence shown to the user: which file, which chunk, how similar (`score`), and the chunk text."""),
         (21, 25, r"""`Answer`: the pipeline's result: the answer text; `grounded` (True only if retrieval found evidence and the LLM was consulted; False for "no documents" and "nothing relevant"); and the list of citations."""),
         (28, 28, r"""The pipeline class."""),
-        (29, 33, r"""**Dependency injection**: the constructor *receives* its embedder, store, LLM and settings instead of creating them. In production `build_pipeline` (bottom of file) passes real ones; in tests we pass fakes. This is why 36 tests run in half a second with no network."""),
+        (29, 33, r"""**Dependency injection**: the constructor *receives* its embedder, store, LLM and settings instead of creating them. In production `build_pipeline` (bottom of file) passes real ones; in tests we pass fakes. This is why the whole test suite runs in about a second with no network."""),
         (35, 36, r"""`ingest` indexes documents and returns a count summary. `total_chunks` counts how many chunks were created."""),
         (37, 38, r"""For each document, first **remove any existing chunks with the same source**. This makes ingest a *replace* (idempotent), so uploading the same file twice never duplicates content. **Limitation:** if a later step fails, the old version is already gone."""),
         (39, 41, r"""Split into chunks using the configured size and overlap. A document with no text yields no chunks; skip it."""),
@@ -229,6 +229,7 @@ APP["app/api.py"] = (
         (78, 79, r"""Claude rate limit (HTTP 429 from Anthropic) becomes HTTP **429** for our client, who can retry later."""),
         (80, 81, r"""Bad or missing API key is *our* configuration problem, not the caller's: return **500** with a generic message (no details leaked)."""),
         (82, 83, r"""Network failure reaching Anthropic: HTTP **503 Service Unavailable**."""),
+        (88, 90, r"""`GET /` is the landing route: it returns a small JSON pointer to `/docs` and `/health`. Without it, opening the bare URL of a deployment returns "Not Found", which looks like a failed deploy. `include_in_schema=False` keeps it out of the generated API docs."""),
         (84, 85, r"""Any other error status from Anthropic: HTTP **502 Bad Gateway** (an upstream service failed). **Order matters:** `RateLimitError` and `AuthenticationError` are *subclasses* of `APIStatusError`, so the specific handlers must come before this general one, otherwise they would never run."""),
     ],
 )
@@ -355,6 +356,7 @@ BY_NAME["tests/test_api.py"] = (
         "test_oversized_file_is_rejected": r"""A file one byte over 5 MB returns 413.""",
         "test_empty_question_fails_validation": r"""An empty question returns 422 from pydantic validation.""",
         "test_rate_limit_from_model_maps_to_429": r"""Simulates Anthropic returning 429: our API must return 429 too (proves the error-mapping chain).""",
+        "test_root_points_to_the_docs": r"""`GET /` returns a JSON pointer whose `docs` field is `/docs`.""",
         "test_missing_credentials_maps_to_500_with_a_helpful_message": r"""When the pipeline raises `MissingCredentialsError`, the API returns 500 and the response body mentions `ANTHROPIC_API_KEY`, so an operator knows what to fix.""",
     },
 )

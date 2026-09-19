@@ -1176,7 +1176,7 @@ The pipeline class.
 33 |         self.settings = settings
 ```
 
-**Dependency injection**: the constructor *receives* its embedder, store, LLM and settings instead of creating them. In production `build_pipeline` (bottom of file) passes real ones; in tests we pass fakes. This is why 36 tests run in half a second with no network.
+**Dependency injection**: the constructor *receives* its embedder, store, LLM and settings instead of creating them. In production `build_pipeline` (bottom of file) passes real ones; in tests we pass fakes. This is why the whole test suite runs in about a second with no network.
 
 **L35-36**
 
@@ -1591,6 +1591,16 @@ Network failure reaching Anthropic: HTTP **503 Service Unavailable**.
 ```
 
 Any other error status from Anthropic: HTTP **502 Bad Gateway** (an upstream service failed). **Order matters:** `RateLimitError` and `AuthenticationError` are *subclasses* of `APIStatusError`, so the specific handlers must come before this general one, otherwise they would never run.
+
+**L88-90**
+
+```python
+88 | @app.get("/", include_in_schema=False)
+89 | def root() -> dict[str, str]:
+90 |     return {"service": "RAG Knowledge Assistant", "docs": "/docs", "health": "/health"}
+```
+
+`GET /` is the landing route: it returns a small JSON pointer to `/docs` and `/health`. Without it, opening the bare URL of a deployment returns "Not Found", which looks like a failed deploy. `include_in_schema=False` keeps it out of the generated API docs.
 
 
 ---
@@ -2487,6 +2497,15 @@ Simulates Anthropic returning 429: our API must return 429 too (proves the error
 ```
 
 When the pipeline raises `MissingCredentialsError`, the API returns 500 and the response body mentions `ANTHROPIC_API_KEY`, so an operator knows what to fix.
+
+**`test_root_points_to_the_docs`** (L66-67)
+
+```python
+66 | def test_root_points_to_the_docs(client):
+67 |     assert client.get("/").json()["docs"] == "/docs"
+```
+
+`GET /` returns a JSON pointer whose `docs` field is `/docs`.
 
 
 ---

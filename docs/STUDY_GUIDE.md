@@ -14,7 +14,7 @@ Read in this order: **(1) this page's pitch and concepts, (2) [ARCHITECTURE.md](
 
 ### 2 minutes (add these)
 - "The stack is Python, FastAPI, a NumPy vector store I wrote so I understand exactly what a vector database does, fastembed for CPU embeddings, and the Anthropic SDK."
-- "Everything is behind interfaces with dependency injection, so the tests use fake embedders and a fake LLM: 38 tests run in half a second with no network."
+- "Everything is behind interfaces with dependency injection, so the tests use fake embedders and a fake LLM: 39 tests run in half a second with no network."
 - "I evaluate retrieval separately from generation: hit@4 was 12 out of 12, and all 5 unanswerable questions were refused at the calibrated threshold."
 - "It is containerised and configured through environment variables, so it is built to run on a container platform such as Azure Container Apps."
   *(Say "built to run", not "deployed", unless you have deployed it. See section 6.)*
@@ -147,7 +147,7 @@ python -m venv .venv && .venv\Scripts\activate        # Windows; use source .ven
 pip install -r requirements-dev.txt
 
 # 2. Show the tests and the retrieval eval
-pytest -q                                              # 38 passed
+pytest -q                                              # 39 passed
 python -m eval.run_eval                                # hit@4 12/12, MRR 0.958, 5/5 refused
 
 # 3. Index the sample documents and ask (works offline)

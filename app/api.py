@@ -83,3 +83,8 @@ def ask(request: AskRequest, pipeline: RagPipeline = Depends(get_pipeline)) -> d
         raise HTTPException(503, "Could not reach the model API") from exc
     except anthropic.APIStatusError as exc:
         raise HTTPException(502, "The model API returned an error") from exc
+
+
+@app.get("/", include_in_schema=False)
+def root() -> dict[str, str]:
+    return {"service": "RAG Knowledge Assistant", "docs": "/docs", "health": "/health"}

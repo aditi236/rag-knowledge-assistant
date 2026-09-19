@@ -24,7 +24,7 @@ flowchart LR
 - **Refuses instead of hallucinating.** A similarity threshold, calibrated from measured scores, stops off-topic questions *before* the model is called (cheaper and safer).
 - **Retrieval is measured.** `python -m eval.run_eval` reports hit@4, MRR and refusal accuracy with no LLM cost. Current: **12/12 hit@4, MRR 0.958, 5/5 refused.**
 - **Runs with no GPU and no key.** Local ONNX embeddings; an offline extractive fallback when no `ANTHROPIC_API_KEY` is set.
-- **Swappable parts.** `Embedder` and `LLM` interfaces with dependency injection, so the tests run in about half a second using fakes (38 tests).
+- **Swappable parts.** `Embedder` and `LLM` interfaces with dependency injection, so the tests run in about half a second using fakes (39 tests).
 - **Production habits.** Typed error mapping (429/500/502/503), upload validation, env-based config, health endpoint, non-root Docker image.
 
 ## Quick start
@@ -33,7 +33,7 @@ flowchart LR
 python -m venv .venv
 .venv\Scripts\activate            # Windows  (Mac/Linux: source .venv/bin/activate)
 pip install -r requirements-dev.txt
-pytest -q                          # 38 passed
+pytest -q                          # 39 passed
 
 # Index the sample documents and ask questions (works with no API key)
 python -m app.cli ingest data/sample_docs
@@ -58,7 +58,7 @@ The first run downloads the embedding model (a quantised ONNX build, about 65 MB
 2. Open a terminal (**Terminal > New Terminal**), then create and activate the environment and install the dependencies (see Quick start).
 3. Press **Ctrl+Shift+P**, run **Python: Select Interpreter**, and choose the one inside `.venv`. *(Most "module not found" errors come from VS Code using a different Python.)*
 4. Open **Run and Debug** (Ctrl+Shift+D). The project ships ready-made launch configurations: **API (uvicorn, reload)**, **CLI: ingest sample docs**, **CLI: ask a question**, **Retrieval eval**. Pick one and press **F5**.
-5. Open the **Testing** panel (beaker icon) to run the 38 tests with a click (pytest is pre-configured in `.vscode/settings.json`).
+5. Open the **Testing** panel (beaker icon) to run the 39 tests with a click (pytest is pre-configured in `.vscode/settings.json`).
 
 ## Troubleshooting
 
@@ -151,7 +151,7 @@ app/
   cli.py           command line
 data/sample_docs/  three synthetic policy documents (a fictional company)
 eval/              retrieval eval set and runner
-tests/             38 tests (fakes, no network)
+tests/             39 tests (fakes, no network)
 docs/              architecture, line-by-line walkthrough, study guide
 scripts/           generator for the walkthrough (fails if any line is undocumented)
 .vscode/          debug/launch configurations and pytest settings

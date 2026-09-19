@@ -61,3 +61,7 @@ def test_missing_credentials_maps_to_500_with_a_helpful_message(client, pipeline
     pipeline.ask = boom
     response = client.post("/ask", json={"question": "hi"})
     assert response.status_code == 500 and "ANTHROPIC_API_KEY" in response.json()["detail"]
+
+
+def test_root_points_to_the_docs(client):
+    assert client.get("/").json()["docs"] == "/docs"
