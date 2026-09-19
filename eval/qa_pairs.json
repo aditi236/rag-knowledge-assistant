@@ -1,0 +1,70 @@
+[
+  {
+    "question": "How many days of annual leave do full-time employees get?",
+    "expected_source": "leave-policy.md"
+  },
+  {
+    "question": "How much notice do I need to give for a two-week holiday?",
+    "expected_source": "leave-policy.md"
+  },
+  {
+    "question": "How long is parental leave for the primary caregiver?",
+    "expected_source": "leave-policy.md"
+  },
+  {
+    "question": "Do I need a doctor's note if I'm off sick for three days?",
+    "expected_source": "leave-policy.md"
+  },
+  {
+    "question": "What is the maximum I can spend on a hotel in London?",
+    "expected_source": "expenses-policy.md"
+  },
+  {
+    "question": "Can I fly business class to Singapore?",
+    "expected_source": "expenses-policy.md"
+  },
+  {
+    "question": "What is the daily meal allowance when travelling?",
+    "expected_source": "expenses-policy.md"
+  },
+  {
+    "question": "Who has to approve an expense claim of USD 1,200?",
+    "expected_source": "expenses-policy.md"
+  },
+  {
+    "question": "Can I use my personal ChatGPT account for client work?",
+    "expected_source": "ai-usage-policy.md"
+  },
+  {
+    "question": "What should I do if I accidentally paste client data into an AI tool?",
+    "expected_source": "ai-usage-policy.md"
+  },
+  {
+    "question": "Does AI-generated code need code review?",
+    "expected_source": "ai-usage-policy.md"
+  },
+  {
+    "question": "Which AI tools are approved for use at work?",
+    "expected_source": "ai-usage-policy.md"
+  },
+  {
+    "question": "What is the capital of France?",
+    "expected_source": null
+  },
+  {
+    "question": "How do I bake sourdough bread?",
+    "expected_source": null
+  },
+  {
+    "question": "Who won the 2022 World Cup?",
+    "expected_source": null
+  },
+  {
+    "question": "What is the CEO's salary?",
+    "expected_source": null
+  },
+  {
+    "question": "What is the company's stock price?",
+    "expected_source": null
+  }
+]
