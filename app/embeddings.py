@@ -16,10 +16,10 @@ def unit_length(vectors: np.ndarray) -> np.ndarray:
 
 
 class FastEmbedEmbedder:
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, cache_dir: str | None = None):
         from fastembed import TextEmbedding
 
-        self._model = TextEmbedding(model_name=model_name)
+        self._model = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
 
     def embed_documents(self, texts: list[str]) -> np.ndarray:
         vectors = np.array(list(self._model.embed(texts)), dtype=np.float32)

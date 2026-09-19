@@ -197,7 +197,7 @@ classDiagram
 | 3 | **Unit-length vectors + dot product** | Compute cosine explicitly each time | Search becomes a single fast matrix multiply | Must remember to normalise everything |
 | 4 | **Similarity threshold** (`MIN_SCORE`) before calling the LLM | Always call the LLM and rely on the prompt to refuse | Cheaper, faster, and removes hallucination risk for off-topic input | A fixed threshold can wrongly refuse a valid but oddly-phrased question; needs calibration (see section 8) |
 | 5 | **Strict grounding prompt** with numbered context and `[n]` citations | Free-form prompt | Verifiable answers; exact refusal sentence | Reduces but does not eliminate hallucination; the model can still mis-cite |
-| 6 | **Interfaces + dependency injection** (`Embedder`, `LLM`) | Hard-wire the concrete classes | Swappable parts; tests use fakes (36 tests in about half a second, no network) | A little more structure than a script |
+| 6 | **Interfaces + dependency injection** (`Embedder`, `LLM`) | Hard-wire the concrete classes | Swappable parts; tests use fakes (38 tests in about half a second, no network) | A little more structure than a script |
 | 7 | **Offline extractive fallback** LLM | Fail if no API key | The whole project runs and demos with no key or cost; CI is free | Fallback answers are raw passages, not synthesised |
 | 8 | **Lazy Claude client** | Create the client at import time | App starts, serves `/health`, accepts uploads even without a key | Missing key is discovered at first question |
 | 9 | **Sync endpoints** (`def`, not `async def`) | Async endpoints | Embedding is CPU-bound and the SDK call is blocking; FastAPI runs sync endpoints in a thread pool so the event loop is never blocked | One thread per in-flight request |
@@ -304,6 +304,22 @@ Honest list, in rough priority order:
 ---
 
 ## 13. Deployment outline
+
+### Vercel (serverless functions)
+
+`pyproject.toml` declares the entrypoint (`app.api:app`). Serverless changes three assumptions the local version relies on, and the code adapts to each when the `VERCEL` environment variable is present:
+
+| Local assumption | Serverless reality | Adaptation |
+|---|---|---|
+| The disk is writable | Read-only except `/tmp` | Index and model cache paths default to `/tmp/...` |
+| The index survives restarts | Instances are recycled; each starts empty | `seed_if_empty` indexes the bundled sample documents at start-up |
+| The process is long-lived | Cold starts | Model is loaded lazily on the first request (about 15 s measured locally), `/health` never loads it |
+
+Consequence: uploads are **not durable** on Vercel. A production version needs the vector index in external storage (for example Postgres with pgvector) and the embedding model bundled into the deployment instead of downloaded at cold start.
+
+### Container platform
+
+
 
 ```mermaid
 flowchart LR

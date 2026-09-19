@@ -66,76 +66,101 @@ Imports. `os` reads environment variables. `dataclass` gives us a tidy settings 
 
 `load_dotenv()` reads a local `.env` file (if one exists) into the process environment. It must run **before** the `Settings` class is defined, because the defaults below are evaluated once, when the class is created. In production (Docker/Azure) there is no `.env`; the platform injects real environment variables and this call quietly does nothing.
 
-**L11-12**
+**L10-11**
 
 ```python
-11 | @dataclass(frozen=True)
-12 | class Settings:
+10 | ROOT = Path(__file__).resolve().parent.parent
+11 | ON_VERCEL = bool(os.getenv("VERCEL"))  # Vercel functions have a read-only disk except /tmp
+```
+
+`ROOT` is the project folder (found relative to this file, so it works from any working directory). `ON_VERCEL` is true when the platform sets the `VERCEL` environment variable. **Why it matters:** a Vercel function's disk is **read-only except `/tmp`**, and `/tmp` is wiped whenever an instance is recycled, so paths that write (the index, the model cache) must move there.
+
+**L14-15**
+
+```python
+14 | @dataclass(frozen=True)
+15 | class Settings:
 ```
 
 `@dataclass(frozen=True)` makes `Settings` an immutable record: once created, nobody can change a value by accident while the app runs. Tests create their own `Settings(...)` with overrides instead of touching globals.
 
-**L13**
+**L16**
 
 ```python
-13 |     index_dir: Path = Path(os.getenv("INDEX_DIR", "storage/index"))
+16 |     index_dir: Path = Path(os.getenv("INDEX_DIR", "/tmp/rag-index" if ON_VERCEL else "storage/index"))
 ```
 
-**Where the index is saved.** `os.getenv("INDEX_DIR", "storage/index")` means "use the env var if set, otherwise this default".
+**Where the index is saved.** `os.getenv("INDEX_DIR", "storage/index")` means "use the env var if set, otherwise this default". On Vercel the default is `/tmp/rag-index`, because that is the only writable place there.
 
-**L14**
+**L17**
 
 ```python
-14 |     embedding_model: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+17 |     embedding_model: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 ```
 
 **Embedding model.** `bge-small-en-v1.5` produces 384-number vectors, runs on a plain CPU, and downloads as a small ONNX file. It is a strong quality-for-size choice. Changing it means re-indexing everything (vectors from different models are not comparable) and re-calibrating `MIN_SCORE`.
 
-**L15**
+**L18**
 
 ```python
-15 |     llm_provider: str = os.getenv("LLM_PROVIDER", "auto")
+18 |     model_cache_dir: str | None = os.getenv("FASTEMBED_CACHE_PATH", "/tmp/fastembed" if ON_VERCEL else None)
 ```
 
-**Which answer generator to use:** `auto` (Claude if an API key exists, else the offline extractive fallback), or force `claude` / `extractive`.
-
-**L16**
-
-```python
-16 |     llm_model: str = os.getenv("LLM_MODEL", "claude-opus-5")
-```
-
-**Which Claude model.** Defaults to `claude-opus-5`. Set `LLM_MODEL=claude-sonnet-5` for a cheaper option; no code change needed.
-
-**L17-18**
-
-```python
-17 |     chunk_size: int = int(os.getenv("CHUNK_SIZE", "800"))
-18 |     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "120"))
-```
-
-**Chunking knobs.** `chunk_size` is in characters (800 is roughly 150 to 200 words, about 200 tokens). `chunk_overlap` (120, about 15%) repeats the end of one chunk at the start of the next, so a fact that straddles a boundary still appears whole in at least one chunk.
+**Where the embedding model is cached.** `None` means "fastembed's default" locally; on Vercel it is `/tmp/fastembed` (writable). The first request on a fresh instance downloads the model (about 65 MB) into it, which is why a cold start takes around 15 seconds.
 
 **L19**
 
 ```python
-19 |     top_k: int = int(os.getenv("TOP_K", "4"))
+19 |     seed_dir: str = os.getenv("SEED_DIR", str(ROOT / "data" / "sample_docs") if ON_VERCEL else "")
 ```
 
-**`top_k`: how many chunks are retrieved** and sent to the model. Too small: you miss the answer. Too large: you pay for noise and distract the model.
+**Seed folder.** If set, and the index is empty at start-up, the documents in this folder are indexed automatically. Off locally (empty string); on Vercel it points at the bundled `data/sample_docs`, because an ephemeral instance always starts with an empty index and would otherwise have nothing to answer from.
 
 **L20**
 
 ```python
-20 |     min_score: float = float(os.getenv("MIN_SCORE", "0.58"))
+20 |     llm_provider: str = os.getenv("LLM_PROVIDER", "auto")
 ```
 
-**`min_score`: the "I don't know" threshold.** Retrieval always returns the *closest* chunks even for nonsense questions, so we need a cut-off. It was calibrated on the sample data: off-topic questions scored up to 0.52, genuine matches scored 0.64 or more, so 0.58 sits in the gap. This number depends on the embedding model and the corpus; re-measure with `python -m eval.run_eval` if either changes.
+**Which answer generator to use:** `auto` (Claude if an API key exists, else the offline extractive fallback), or force `claude` / `extractive`.
 
 **L21**
 
 ```python
-21 |     max_answer_tokens: int = int(os.getenv("MAX_ANSWER_TOKENS", "4096"))
+21 |     llm_model: str = os.getenv("LLM_MODEL", "claude-opus-5")
+```
+
+**Which Claude model.** Defaults to `claude-opus-5`. Set `LLM_MODEL=claude-sonnet-5` for a cheaper option; no code change needed.
+
+**L22-23**
+
+```python
+22 |     chunk_size: int = int(os.getenv("CHUNK_SIZE", "800"))
+23 |     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "120"))
+```
+
+**Chunking knobs.** `chunk_size` is in characters (800 is roughly 150 to 200 words, about 200 tokens). `chunk_overlap` (120, about 15%) repeats the end of one chunk at the start of the next, so a fact that straddles a boundary still appears whole in at least one chunk.
+
+**L24**
+
+```python
+24 |     top_k: int = int(os.getenv("TOP_K", "4"))
+```
+
+**`top_k`: how many chunks are retrieved** and sent to the model. Too small: you miss the answer. Too large: you pay for noise and distract the model.
+
+**L25**
+
+```python
+25 |     min_score: float = float(os.getenv("MIN_SCORE", "0.58"))
+```
+
+**`min_score`: the "I don't know" threshold.** Retrieval always returns the *closest* chunks even for nonsense questions, so we need a cut-off. It was calibrated on the sample data: off-topic questions scored up to 0.52, genuine matches scored 0.64 or more, so 0.58 sits in the gap. This number depends on the embedding model and the corpus; re-measure with `python -m eval.run_eval` if either changes.
+
+**L26**
+
+```python
+26 |     max_answer_tokens: int = int(os.getenv("MAX_ANSWER_TOKENS", "4096"))
 ```
 
 Maximum tokens Claude may produce. This budget also covers the model's internal reasoning on models that think by default, so it is set generously (4096) to avoid truncated answers.
@@ -584,13 +609,13 @@ The real embedder, backed by the `fastembed` library (ONNX runtime, CPU-only, no
 **L19-22**
 
 ```python
-19 |     def __init__(self, model_name: str):
+19 |     def __init__(self, model_name: str, cache_dir: str | None = None):
 20 |         from fastembed import TextEmbedding
 21 | 
-22 |         self._model = TextEmbedding(model_name=model_name)
+22 |         self._model = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
 ```
 
-Constructor. The import sits **inside** the method (a *lazy import*), so importing this module, and running unit tests, does not load the heavy library or trigger a model download. `TextEmbedding(...)` downloads the model the first time (cached afterwards) and loads it into memory.
+Constructor. `cache_dir` (optional) says where the model files are stored; the pipeline passes `/tmp/fastembed` on Vercel because that is the only writable folder. The import sits **inside** the method (a *lazy import*), so importing this module, and running unit tests, does not load the heavy library or trigger a model download. `TextEmbedding(...)` downloads the model the first time (cached afterwards) and loads it into memory.
 
 **L24-26**
 
@@ -1102,7 +1127,7 @@ Docstring.
  6 | from app.config import Settings
  7 | from app.embeddings import Embedder, FastEmbedEmbedder
  8 | from app.llm import LLM, NOT_FOUND_MESSAGE, build_llm
- 9 | from app.loader import Document
+ 9 | from app.loader import Document, load_directory
 10 | from app.vector_store import VectorStore
 ```
 
@@ -1275,16 +1300,29 @@ Build the citation list from the same results the model saw, so what the user is
 
 Return the answer, marked `grounded=True`.
 
-**L62-65**
+**L61-63**
 
 ```python
-62 | def build_pipeline(settings: Settings) -> RagPipeline:
-63 |     embedder = FastEmbedEmbedder(settings.embedding_model)
-64 |     store = VectorStore.load(Path(settings.index_dir))
-65 |     return RagPipeline(embedder, store, build_llm(settings), settings)
+61 |     def seed_if_empty(self, directory: Path) -> None:
+62 |         if len(self.store) == 0 and directory.is_dir():
+63 |             self.ingest(load_directory(directory))
 ```
 
-`build_pipeline` is the **composition root**: the one place where concrete classes are chosen and connected. It builds the real embedder, loads any previously saved index from disk (so restarts do not lose data), creates the LLM from settings, and assembles the pipeline.
+`seed_if_empty` indexes a folder of documents **only if the index has nothing in it yet** (and the folder exists). It is what lets a stateless deployment start with useful content: an ephemeral serverless instance boots with an empty index every time, so it loads the bundled sample documents once. Calling it again later does nothing, because the index is no longer empty. It reuses `ingest`, so it is chunked, embedded and saved the same way.
+
+**L66-72**
+
+```python
+66 | def build_pipeline(settings: Settings) -> RagPipeline:
+67 |     embedder = FastEmbedEmbedder(settings.embedding_model, settings.model_cache_dir)
+68 |     store = VectorStore.load(Path(settings.index_dir))
+69 |     pipeline = RagPipeline(embedder, store, build_llm(settings), settings)
+70 |     if settings.seed_dir:
+71 |         pipeline.seed_if_empty(Path(settings.seed_dir))
+72 |     return pipeline
+```
+
+`build_pipeline` is the **composition root**: the one place where concrete classes are chosen and connected. It builds the real embedder (passing the model cache folder from settings), loads any previously saved index from disk (so restarts do not lose data), creates the LLM from settings, and assembles the pipeline. If a `seed_dir` is configured (it is on Vercel), it then seeds the empty index from that folder before returning the ready pipeline.
 
 
 ---
@@ -2159,6 +2197,30 @@ After ingest, `chunks.json` and `vectors.npy` exist.
 ```
 
 The prompt contains `[1] (source: leave.md)` and ends with the question.
+
+**`test_seed_if_empty_indexes_a_folder_only_when_the_index_is_empty`** (L48-54)
+
+```python
+48 | def test_seed_if_empty_indexes_a_folder_only_when_the_index_is_empty(pipeline, tmp_path):
+49 |     (tmp_path / "seed.md").write_text("The office opens at nine.", encoding="utf-8")
+50 |     pipeline.seed_if_empty(tmp_path)
+51 |     assert pipeline.store.sources() == {"seed.md": 1}
+52 |     (tmp_path / "later.md").write_text("Another file.", encoding="utf-8")
+53 |     pipeline.seed_if_empty(tmp_path)
+54 |     assert pipeline.store.sources() == {"seed.md": 1}
+```
+
+Seeds from a temporary folder; adding another file and calling `seed_if_empty` again must change nothing, because the index is no longer empty.
+
+**`test_seed_if_empty_ignores_a_missing_folder`** (L57-59)
+
+```python
+57 | def test_seed_if_empty_ignores_a_missing_folder(pipeline, tmp_path):
+58 |     pipeline.seed_if_empty(tmp_path / "does-not-exist")
+59 |     assert len(pipeline.store) == 0
+```
+
+A folder that does not exist is silently ignored, so a mis-set `SEED_DIR` cannot crash start-up.
 
 
 ---

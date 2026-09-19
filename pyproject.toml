@@ -1,0 +1,19 @@
+[project]
+name = "rag-knowledge-assistant"
+version = "1.0.0"
+description = "RAG document Q&A: local embeddings, cosine retrieval, Claude answers with citations."
+requires-python = ">=3.10"
+# Keep in sync with requirements.txt (Vercel reads this file; pip users read requirements.txt).
+dependencies = [
+    "numpy>=2.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "anthropic>=1.0",
+    "fastembed>=0.4",
+    "pypdf>=4.0",
+    "python-multipart>=0.0.9",
+    "python-dotenv>=1.0",
+]
+
+[tool.vercel]
+entrypoint = "app.api:app"

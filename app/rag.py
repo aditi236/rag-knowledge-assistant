@@ -6,7 +6,7 @@ from app.chunker import chunk_document
 from app.config import Settings
 from app.embeddings import Embedder, FastEmbedEmbedder
 from app.llm import LLM, NOT_FOUND_MESSAGE, build_llm
-from app.loader import Document
+from app.loader import Document, load_directory
 from app.vector_store import VectorStore
 
 
@@ -58,8 +58,15 @@ class RagPipeline:
         ]
         return Answer(text, True, citations)
 
+    def seed_if_empty(self, directory: Path) -> None:
+        if len(self.store) == 0 and directory.is_dir():
+            self.ingest(load_directory(directory))
+
 
 def build_pipeline(settings: Settings) -> RagPipeline:
-    embedder = FastEmbedEmbedder(settings.embedding_model)
+    embedder = FastEmbedEmbedder(settings.embedding_model, settings.model_cache_dir)
     store = VectorStore.load(Path(settings.index_dir))
-    return RagPipeline(embedder, store, build_llm(settings), settings)
+    pipeline = RagPipeline(embedder, store, build_llm(settings), settings)
+    if settings.seed_dir:
+        pipeline.seed_if_empty(Path(settings.seed_dir))
+    return pipeline

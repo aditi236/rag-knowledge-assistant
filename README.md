@@ -24,7 +24,7 @@ flowchart LR
 - **Refuses instead of hallucinating.** A similarity threshold, calibrated from measured scores, stops off-topic questions *before* the model is called (cheaper and safer).
 - **Retrieval is measured.** `python -m eval.run_eval` reports hit@4, MRR and refusal accuracy with no LLM cost. Current: **12/12 hit@4, MRR 0.958, 5/5 refused.**
 - **Runs with no GPU and no key.** Local ONNX embeddings; an offline extractive fallback when no `ANTHROPIC_API_KEY` is set.
-- **Swappable parts.** `Embedder` and `LLM` interfaces with dependency injection, so the tests run in about half a second using fakes (36 tests).
+- **Swappable parts.** `Embedder` and `LLM` interfaces with dependency injection, so the tests run in about half a second using fakes (38 tests).
 - **Production habits.** Typed error mapping (429/500/502/503), upload validation, env-based config, health endpoint, non-root Docker image.
 
 ## Quick start
@@ -33,7 +33,7 @@ flowchart LR
 python -m venv .venv
 .venv\Scripts\activate            # Windows  (Mac/Linux: source .venv/bin/activate)
 pip install -r requirements-dev.txt
-pytest -q                          # 36 passed
+pytest -q                          # 38 passed
 
 # Index the sample documents and ask questions (works with no API key)
 python -m app.cli ingest data/sample_docs
@@ -58,7 +58,7 @@ The first run downloads the embedding model (a quantised ONNX build, about 65 MB
 2. Open a terminal (**Terminal > New Terminal**), then create and activate the environment and install the dependencies (see Quick start).
 3. Press **Ctrl+Shift+P**, run **Python: Select Interpreter**, and choose the one inside `.venv`. *(Most "module not found" errors come from VS Code using a different Python.)*
 4. Open **Run and Debug** (Ctrl+Shift+D). The project ships ready-made launch configurations: **API (uvicorn, reload)**, **CLI: ingest sample docs**, **CLI: ask a question**, **Retrieval eval**. Pick one and press **F5**.
-5. Open the **Testing** panel (beaker icon) to run the 36 tests with a click (pytest is pre-configured in `.vscode/settings.json`).
+5. Open the **Testing** panel (beaker icon) to run the 38 tests with a click (pytest is pre-configured in `.vscode/settings.json`).
 
 ## Troubleshooting
 
@@ -99,6 +99,26 @@ Example response (illustrative):
 }
 ```
 
+## Deploying to Vercel
+
+The repo includes `pyproject.toml` with the entrypoint Vercel needs, so it deploys with no extra configuration:
+
+```toml
+[tool.vercel]
+entrypoint = "app.api:app"
+```
+
+1. Import the GitHub repo in Vercel (or run `vercel` from the project folder).
+2. In **Project Settings > Environment Variables** add `ANTHROPIC_API_KEY`. Without it the app still works, using the offline extractive answers.
+3. Deploy, then open `https://<your-project>.vercel.app/docs`.
+
+**How it adapts to Vercel.** A function's disk is read-only except `/tmp`, and instances are stateless. When Vercel sets the `VERCEL` variable the app therefore writes its index and model cache under `/tmp` and, because every new instance starts empty, indexes the bundled sample documents on start-up.
+
+**What to expect (be aware of these):**
+- **The first request after a cold start takes roughly 15 seconds** (it downloads the 65 MB embedding model and indexes the sample documents). Later requests on a warm instance take well under a second. Measured locally with the Vercel settings; not measured on Vercel itself.
+- **Uploaded documents are not durable.** They live in `/tmp` on one instance and disappear when it is recycled, and other instances never see them. This is a demo deployment. For real use, keep the index in external storage (a hosted vector database such as Postgres with pgvector, or a blob store) instead of local files.
+- **Not yet verified on Vercel:** this configuration was tested by simulating Vercel's environment locally; the deployment itself has not been run.
+
 ## Configuration
 
 All settings are environment variables (see `.env.example`).
@@ -112,7 +132,9 @@ All settings are environment variables (see `.env.example`).
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `800` / `120` | Characters per chunk / overlap |
 | `TOP_K` | `4` | Chunks sent to the model |
 | `MIN_SCORE` | `0.58` | Similarity below which the system says "not found" |
-| `INDEX_DIR` | `storage/index` | Where the index is saved |
+| `INDEX_DIR` | `storage/index` (`/tmp/rag-index` on Vercel) | Where the index is saved |
+| `FASTEMBED_CACHE_PATH` | fastembed default (`/tmp/fastembed` on Vercel) | Where the embedding model is cached |
+| `SEED_DIR` | empty (bundled samples on Vercel) | Folder indexed automatically when the index is empty |
 
 ## Project layout
 
@@ -129,10 +151,11 @@ app/
   cli.py           command line
 data/sample_docs/  three synthetic policy documents (a fictional company)
 eval/              retrieval eval set and runner
-tests/             36 tests (fakes, no network)
+tests/             38 tests (fakes, no network)
 docs/              architecture, line-by-line walkthrough, study guide
 scripts/           generator for the walkthrough (fails if any line is undocumented)
 .vscode/          debug/launch configurations and pytest settings
+pyproject.toml     dependencies + Vercel entrypoint
 Dockerfile
 ```
 

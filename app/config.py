@@ -7,11 +7,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+ROOT = Path(__file__).resolve().parent.parent
+ON_VERCEL = bool(os.getenv("VERCEL"))  # Vercel functions have a read-only disk except /tmp
+
 
 @dataclass(frozen=True)
 class Settings:
-    index_dir: Path = Path(os.getenv("INDEX_DIR", "storage/index"))
+    index_dir: Path = Path(os.getenv("INDEX_DIR", "/tmp/rag-index" if ON_VERCEL else "storage/index"))
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+    model_cache_dir: str | None = os.getenv("FASTEMBED_CACHE_PATH", "/tmp/fastembed" if ON_VERCEL else None)
+    seed_dir: str = os.getenv("SEED_DIR", str(ROOT / "data" / "sample_docs") if ON_VERCEL else "")
     llm_provider: str = os.getenv("LLM_PROVIDER", "auto")
     llm_model: str = os.getenv("LLM_MODEL", "claude-opus-5")
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "800"))

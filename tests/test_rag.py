@@ -43,3 +43,17 @@ def test_prompt_numbers_passages_and_includes_the_question(pipeline):
     results = pipeline.store.search(pipeline.embedder.embed_query("annual leave"), 3, 0.0)
     message = build_user_message("annual leave?", results)
     assert "[1] (source: leave.md)" in message and message.endswith("Question: annual leave?")
+
+
+def test_seed_if_empty_indexes_a_folder_only_when_the_index_is_empty(pipeline, tmp_path):
+    (tmp_path / "seed.md").write_text("The office opens at nine.", encoding="utf-8")
+    pipeline.seed_if_empty(tmp_path)
+    assert pipeline.store.sources() == {"seed.md": 1}
+    (tmp_path / "later.md").write_text("Another file.", encoding="utf-8")
+    pipeline.seed_if_empty(tmp_path)
+    assert pipeline.store.sources() == {"seed.md": 1}
+
+
+def test_seed_if_empty_ignores_a_missing_folder(pipeline, tmp_path):
+    pipeline.seed_if_empty(tmp_path / "does-not-exist")
+    assert len(pipeline.store) == 0
